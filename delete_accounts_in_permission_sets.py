@@ -3,6 +3,7 @@ import time
 
 AWS_REGION = "ap-southeast-2"
 PERMISSION_SET_NAME = "NOCEngineer"
+WAIT_INTERVAL = 3
 
 sso_admin = boto3.client("sso-admin", region_name=AWS_REGION)
 
@@ -11,6 +12,8 @@ sso_admin = boto3.client("sso-admin", region_name=AWS_REGION)
 
 def get_instance_arn():
     resp = sso_admin.list_instances()
+    if not resp["Instances"]:
+        raise RuntimeError("沒有找到任何 SSO instance")
     return resp["Instances"][0]["InstanceArn"]
 
 
@@ -52,8 +55,6 @@ def list_assignments(instance_arn, account_id, permission_set_arn):
     return assignments
 
 
-# ---------- delete assignment ----------
-
 def delete_assignment(instance_arn, account_id, permission_set_arn, a):
     resp = sso_admin.delete_account_assignment(
         InstanceArn=instance_arn,
@@ -77,47 +78,41 @@ def wait_for_assignment_deletion(instance_arn, request_id):
             return state
         time.sleep(1)
 
+
 # ---------- main ----------
 
 def main():
     instance_arn = get_instance_arn()
     print(f"InstanceArn: {instance_arn}")
 
-    permission_set_arn = get_permission_set_arn(
-        instance_arn, PERMISSION_SET_NAME
-    )
+    permission_set_arn = get_permission_set_arn(instance_arn, PERMISSION_SET_NAME)
     print(f"PermissionSetArn: {permission_set_arn}")
 
-    accounts = list_accounts(instance_arn, permission_set_arn)
-    print(f"Found {len(accounts)} provisioned accounts")
+    while True:
+        accounts = list_accounts(instance_arn, permission_set_arn)
+        if not accounts:
+            print("\n✅ 所有帳號的 Permission Set 已解除 provision")
+            break
 
-    for account_id in accounts:
-        print(f"\nAccount {account_id}")
+        print(f"\nFound {len(accounts)} provisioned accounts")
+        for account_id in accounts:
+            print(f"\nAccount {account_id}")
 
-        assignments = list_assignments(
-            instance_arn, account_id, permission_set_arn
-        )
+            assignments = list_assignments(instance_arn, account_id, permission_set_arn)
+            if assignments:
+                for a in assignments:
+                    print(f"  Deleting {a['PrincipalType']} {a['PrincipalId']} ...")
+                    req = delete_assignment(instance_arn, account_id, permission_set_arn, a)
+                    result = wait_for_assignment_deletion(instance_arn, req)
+                    print(f"    → {result}")
+            else:
+                print("  No assignments to delete")
 
-        # 1️⃣ delete assignments (user / group)
-        if assignments:
-            for a in assignments:
-                print(
-                    f"  Deleting {a['PrincipalType']} {a['PrincipalId']}"
-                )
-                req = delete_assignment(
-                    instance_arn, account_id, permission_set_arn, a
-                )
-                result = wait_for_assignment_deletion(instance_arn, req)
-                print(f"    → {result}")
-        else:
-            print("  No assignments")
+        print(f"\n等待 {WAIT_INTERVAL} 秒，讓 AWS 同步解除 provision ...")
+        time.sleep(WAIT_INTERVAL)
 
-        # 2️⃣ deprovision permission set from account
-        print("  Deprovisioning permission set from account")
-
-    print("\n✅ All accounts cleaned.")
-    print("You can now safely delete the Permission Set.")
-    
+    print("\n所有帳號的 Permission Set 已完全解除 provision！")
+    print("你可以安全地刪除 Permission Set。")
 
 
 if __name__ == "__main__":

@@ -41,4 +41,4 @@ def create_folders(account_names, base_path='.'):
 
 if __name__ == "__main__":
     account_names = list_aws_accounts()
-    create_folders(account_names)
+    # create_folders(account_names)
